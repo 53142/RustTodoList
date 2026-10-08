@@ -143,7 +143,7 @@ fn main() -> Result<()> {
 
     
     // Show options of what user can do
-    println!("\nType the number of a todo list item to modify it or the name of a new todo list item to create it.");
+    print!("\nType the number of a todo list item to modify it or a new todo list item name:");
     loop {
         let mut input = String::new();
         io::stdin()
@@ -156,14 +156,38 @@ fn main() -> Result<()> {
         }
 
         if let Ok(i) = input.parse::<usize>() {
-            if i >= 1 && i <= todo_list_items.len() {
+            if i >= 1 && i <= todo_list_items.len() { // number selected
                 let item = &mut todo_list_items[i-1];
+
+                // Display item info
+                println!("1. {}\n2. {}\n3. {}\n4. {}\n", item.item_name, item.status, item.priority, item.due_date);
+
+                print!("Enter the desired line number to modify: ");
+                loop {
+                    let mut input = String::new();
+                    io::stdin()
+                        .read_line(&mut input)
+                        .expect("Failed to read user input");
+                    let input = input.trim();
+
+                    if input.is_empty() {
+                        continue;
+                    }
+                    if let Ok(i) = input.parse::<usize>() {
+                        if i == 1 {}
+                    }
+                }
+
+
                 item.status = TodoListItemStatus::Complete;
                 write_data_to_file(&todo_list_items, &mut file).unwrap();
                 break
             }
             continue
         } else { // create new item
+            // ask user other info
+
+            
             let item = TodoListItem {
                 item_name: input.to_string(),
                 priority: TodoListPriority::Low,
