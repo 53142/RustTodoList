@@ -7,32 +7,22 @@ use chrono::TimeZone;
 use std::io::prelude::*;
 use std::io::{self};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 enum TodoListItemStatus {
     NotStarted,
     InProgress,
     Complete,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 struct TodoListItem {
-    itemName: String,
+    item_name: String,
     priority: u8,
-    dueDate: DateTime<Utc>,
+    due_date: DateTime<Utc>,
     status: TodoListItemStatus,
 }
 
 fn main() -> Result<()> {
-    let testing_data = TodoListItem {
-        itemName: String::from("test"),
-        priority: 3,
-        dueDate: Utc.with_ymd_and_hms(2027, 1, 1, 12, 0, 0).unwrap(),
-        status: TodoListItemStatus::NotStarted,
-    };
-
-    let serialized = serde_json::to_string(&testing_data)?;
-    println!("{}", serialized);
-
     println!("Searching for existing todo list file");
     let path = Path::new("TodoList.json");
 
@@ -66,11 +56,49 @@ fn main() -> Result<()> {
     }
 
     let display = path.display();
-    let mut file = match File::open(&path) {
+    let mut file = match File::options()
+    .read(true)
+    .write(true)
+    .open(&path) {
         Err(e) => panic!("Error opening {}: {}", display, e),
         Ok(file) => file,
     };
+
+
+
+    // temp for writing to json file
+    let testing_data = vec![
+        TodoListItem {
+            item_name: String::from("test"),
+            priority: 3,
+            due_date: Utc.with_ymd_and_hms(2027, 1, 1, 12, 0, 0).unwrap(),
+            status: TodoListItemStatus::NotStarted,
+        },
+        TodoListItem {
+            item_name: String::from("test2"),
+            priority: 3,
+            due_date: Utc.with_ymd_and_hms(2028, 1, 1, 12, 0, 0).unwrap(),
+            status: TodoListItemStatus::InProgress,
+        }
+    ];
+
+    let serialized = serde_json::to_string_pretty(&testing_data)?;
+    file.write_all(serialized.as_bytes()).unwrap();
+
+    // end temp for writing to json file
+
+
+
+
+    file.rewind().expect("Couldn't set cursor to beginnging of file");
     let mut file_contents = String::new();
-    file.read_to_string(&mut file_contents).expect("couldn't read");
+    file.read_to_string(&mut file_contents).expect("Failed to read file contents");
+    match serde_json::from_str::<Vec<TodoListItem>>(&file_contents.to_string()) {
+        Ok(i) => println!("Successfully parsed todo list item: {:?}", i),
+        Err(e) => println!("Failed to parse JSON: {}", e),
+    }
+
+    
+
     Ok(())
 }
