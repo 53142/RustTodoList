@@ -3,8 +3,11 @@ use crossterm::event::{self, KeyCode};
 use ratatui::{DefaultTerminal, Frame};
 use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
-use ratatui::text::{Line, Span, ToText};
-use ratatui::widgets::{Block, BorderType, Clear, List, ListItem, ListState, Scrollbar, ScrollbarOrientation, ScrollbarState};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{
+    Block, BorderType, Clear, List, ListItem, ListState, Scrollbar,
+    ScrollbarOrientation, ScrollbarState,
+};
 use core::fmt;
 use std::fs::File;
 use std::path::Path;
@@ -72,7 +75,7 @@ struct App<'a> {
     priority: TodoListPriority,
     status: TodoListItemStatus,
     due_date: DateTime<Utc>,
-    popup_index: usize, // Item selected within popup menu
+    popup_index: usize,
     popup_text_input: String,
 }
 
@@ -84,19 +87,22 @@ fn write_data_to_file(path: &Path, data: &[TodoListItem]) -> Result<()> {
 }
 
 fn read_data_from_file(path: &Path) -> Result<Vec<TodoListItem>> {
-    // Create file if doesn't exist and return
     if !path.exists() {
         let mut file = File::create(path)?;
         file.write_all(b"[]")?;
         return Ok(vec![]);
     }
+
     let mut file = File::open(path)?;
+
     // Return if file empty
     if file.metadata()?.len() == 0 {
         return Ok(vec![]);
     }
+
     let mut file_contents = String::new();
     file.read_to_string(&mut file_contents)?;
+
     let items = serde_json::from_str(&file_contents)?;
     Ok(items)
 }
@@ -121,12 +127,16 @@ impl App<'_> {
     fn new() -> Result<Self> {
         let file_path = Path::new("TodoList.json");
         let items = read_data_from_file(file_path)?;
+
         let mut list_state = ListState::default();
+
         // Select first item if there are items
         if !items.is_empty() {
             list_state.select(Some(0));
         }
+
         let scroll_state = ScrollbarState::new(items.len());
+
         Ok(Self {
             path: file_path,
             todo_list_items: items,
@@ -137,7 +147,7 @@ impl App<'_> {
             scroll_state,
             priority: TodoListPriority::Medium,
             status: TodoListItemStatus::NotStarted,
-            due_date: Utc::now(),
+            due_date: Utc::now() + chrono::Duration::days(1),
             popup_index: 0,
             popup_text_input: String::new(),
         })
@@ -153,11 +163,6 @@ impl App<'_> {
 
     fn enter_char(&mut self, new_char: char) {
         self.text_input.insert(self.byte_index(), new_char);
-        self.move_cursor_right();
-    }
-
-    fn enter_char_popup(&mut self, new_char: char) {
-        self.popup_text_input.insert(self.byte_index(), new_char);
         self.move_cursor_right();
     }
 
@@ -200,59 +205,62 @@ impl App<'_> {
     }
 
     fn save_new_item(&mut self) -> Result<()> {
+        let parsed_date = DateTime::parse_from_str(
+            &format!("{} +0000", self.popup_text_input.trim()),
+            "%Y-%m-%d %H:%M:%S %z",
+        )
+        .map(|dt| dt.with_timezone(&Utc))
+        .unwrap_or_else(|_| Utc::now() + chrono::Duration::days(1));
+
         self.todo_list_items.push(TodoListItem {
             item_name: self.text_input.clone(),
             priority: self.priority.clone(),
-            due_date: self.due_date.clone(),
+            due_date: parsed_date,
             status: self.status.clone(),
         });
+
         self.text_input.clear();
         self.reset_cursor();
+
         write_data_to_file(self.path, &self.todo_list_items)?;
+
         self.scroll_state = self.scroll_state.content_length(self.todo_list_items.len());
 
         if self.list_state.selected().is_none() && !self.todo_list_items.is_empty() {
             self.list_state.select(Some(0));
         }
 
-        // Reset popup form values to defaults
         self.priority = TodoListPriority::Medium;
         self.status = TodoListItemStatus::NotStarted;
-        self.due_date = Utc::now();
+        self.due_date = Utc::now() + chrono::Duration::days(1);
+        self.popup_text_input.clear();
         self.popup_index = 0;
 
         Ok(())
     }
 
-    // fn toggle_status(&mut self) -> Result<()> {
-    //     if let Some(i) = self.list_state.selected() {
-    //         // If item is in list
-    //         if let Some(item) = self.todo_list_items.get_mut(i) {
-    //             item.status = match item.status {
-    //                 TodoListItemStatus::NotStarted => TodoListItemStatus::InProgress,
-    //                 TodoListItemStatus::InProgress => TodoListItemStatus::Complete,
-    //                 TodoListItemStatus::Complete => TodoListItemStatus::NotStarted,
-    //             };
-    //             write_data_to_file(self.path, &self.todo_list_items)?;
-    //         }
-    //     }
-    //     Ok(())
-    // }
-
     fn delete_selected_item(&mut self) -> Result<()> {
         if let Some(i) = self.list_state.selected() {
             if !self.todo_list_items.is_empty() {
                 self.todo_list_items.remove(i);
+
                 write_data_to_file(self.path, &self.todo_list_items)?;
+
                 let new_selected = i.saturating_sub(1);
+
                 if self.todo_list_items.is_empty() {
                     self.list_state.select(None);
                 } else {
-                    self.list_state.select(Some(new_selected.min(self.todo_list_items.len() - 1)));
+                    self.list_state.select(Some(
+                        new_selected.min(self.todo_list_items.len() - 1),
+                    ));
                 }
-                self.scroll_state = self.scroll_state.content_length(self.todo_list_items.len());
+
+                self.scroll_state =
+                    self.scroll_state.content_length(self.todo_list_items.len());
             }
         }
+
         Ok(())
     }
 
@@ -264,6 +272,7 @@ impl App<'_> {
                 match self.input_mode {
                     InputMode::Normal => match key.code {
                         KeyCode::Char('q') | KeyCode::Esc => break Ok(()),
+
                         KeyCode::Down | KeyCode::Char('j') => {
                             if !self.todo_list_items.is_empty() {
                                 let i = self.list_state.selected().unwrap_or(0);
@@ -271,6 +280,7 @@ impl App<'_> {
                                 self.list_state.select(Some(next));
                             }
                         }
+
                         KeyCode::Up | KeyCode::Char('k') => {
                             if !self.todo_list_items.is_empty() {
                                 let i = self.list_state.selected().unwrap_or(0);
@@ -278,53 +288,68 @@ impl App<'_> {
                                 self.list_state.select(Some(prev));
                             }
                         }
+
                         KeyCode::Char('i') | KeyCode::Char('a') => {
                             self.input_mode = InputMode::Editing;
                         }
+
                         KeyCode::Enter | KeyCode::Char(' ') => {
-                            // self.toggle_status()?;
                             if let Some(i) = self.list_state.selected() {
-                                // If selected item is in list
                                 if let Some(item) = self.todo_list_items.get_mut(i) {
                                     self.priority = item.priority.clone();
                                     self.status = item.status.clone();
                                     self.due_date = item.due_date.clone();
                                 }
                             }
+
                             self.input_mode = InputMode::ModifyingItem;
                         }
+
                         KeyCode::Char('d') | KeyCode::Delete => {
                             self.delete_selected_item()?;
                         }
+
                         _ => {}
                     },
+
                     InputMode::Editing => match key.code {
                         KeyCode::Enter => {
                             if !self.text_input.trim().is_empty() {
                                 self.input_mode = InputMode::ModifyingItem;
                             }
                         }
+
                         KeyCode::Esc => {
                             self.input_mode = InputMode::Normal;
                         }
+
                         KeyCode::Char(to_insert) => self.enter_char(to_insert),
                         KeyCode::Backspace => self.backspace_char(),
                         KeyCode::Delete => self.delete_char(),
                         KeyCode::Left => self.move_cursor_left(),
                         KeyCode::Right => self.move_cursor_right(),
+
                         _ => {}
                     },
+
                     InputMode::ModifyingItem => match key.code {
                         KeyCode::Esc => {
                             self.input_mode = InputMode::Editing;
                         }
+
                         KeyCode::Up | KeyCode::Char('k') => {
                             self.popup_index = self.popup_index.saturating_sub(1);
                         }
+
                         KeyCode::Down | KeyCode::Char('j') => {
                             self.popup_index = (self.popup_index + 1).min(2);
                         }
-                        KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') => {
+
+                        KeyCode::Left
+                        | KeyCode::Right
+                        | KeyCode::Char(' ')
+                            if self.popup_index != 2 =>
+                        {
                             match self.popup_index {
                                 0 => {
                                     self.priority = match self.priority {
@@ -333,28 +358,38 @@ impl App<'_> {
                                         TodoListPriority::High => TodoListPriority::Low,
                                     };
                                 }
+
                                 1 => {
                                     self.status = match self.status {
-                                        TodoListItemStatus::NotStarted => TodoListItemStatus::InProgress,
-                                        TodoListItemStatus::InProgress => TodoListItemStatus::Complete,
-                                        TodoListItemStatus::Complete => TodoListItemStatus::NotStarted,
+                                        TodoListItemStatus::NotStarted => {
+                                            TodoListItemStatus::InProgress
+                                        }
+                                        TodoListItemStatus::InProgress => {
+                                            TodoListItemStatus::Complete
+                                        }
+                                        TodoListItemStatus::Complete => {
+                                            TodoListItemStatus::NotStarted
+                                        }
                                     };
                                 }
-                                // 2 => {
-                                //     if matches!(key.code, KeyCode::Right) {
-                                //         self.due_days += 1;
-                                //     } else {
-                                //         self.due_days = (self.due_days - 1).max(0);
-                                //     }
-                                // }
+
                                 _ => {}
                             }
-                        },
-                        KeyCode::Char(to_insert) => self.enter_char_popup(to_insert),
+                        }
+
+                        KeyCode::Char(to_insert) if self.popup_index == 2 => {
+                            self.popup_text_input.push(to_insert);
+                        }
+
+                        KeyCode::Backspace if self.popup_index == 2 => {
+                            self.popup_text_input.pop();
+                        }
+
                         KeyCode::Enter => {
-                            self.save_new_item()?; // Save using temp values
+                            self.save_new_item()?;
                             self.input_mode = InputMode::Normal;
                         }
+
                         _ => {}
                     },
                 }
@@ -367,16 +402,22 @@ impl App<'_> {
             Constraint::Length(3),
             Constraint::Fill(1),
             Constraint::Length(3),
-        ]).spacing(1);
+        ])
+        .spacing(1);
+
         let [top, main, bottom] = frame.area().layout(&layout);
 
         let title = Line::from_iter([
             Span::from("Todo List TUI").bold().cyan(),
-            Span::from(" | [i/a] Add Task | [Enter/Space] Toggle Status | [d] Delete | [q] Quit"),
+            Span::from(
+                " | [i/a] Add Task | [Enter/Space] Toggle Status | [d] Delete | [q] Quit",
+            ),
         ]);
+
         frame.render_widget(Block::bordered().title(title), top);
 
-        let items: Vec<ListItem> = self.todo_list_items
+        let items: Vec<ListItem> = self
+            .todo_list_items
             .iter()
             .map(|item| {
                 let status_symbol = match item.status {
@@ -384,6 +425,7 @@ impl App<'_> {
                     TodoListItemStatus::InProgress => "[*]",
                     TodoListItemStatus::Complete => "[X]",
                 };
+
                 let content = format!(
                     "{} {} | Priority: {} | Due: {}",
                     status_symbol,
@@ -391,6 +433,7 @@ impl App<'_> {
                     item.priority,
                     item.due_date.format("%Y-%m-%d %H:%M:%S"),
                 );
+
                 ListItem::new(content)
             })
             .collect();
@@ -406,14 +449,19 @@ impl App<'_> {
             .highlight_symbol("> ");
 
         self.scroll_state = self.scroll_state.content_length(self.todo_list_items.len());
-        self.scroll_state = self.scroll_state.position(self.list_state.selected().unwrap_or(0));
+        self.scroll_state =
+            self.scroll_state.position(self.list_state.selected().unwrap_or(0));
 
         frame.render_stateful_widget(list, main, &mut self.list_state);
-        
+
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
+
         frame.render_stateful_widget(
             scrollbar,
-            main.inner(Margin { vertical: 1, horizontal: 0 }),
+            main.inner(Margin {
+                vertical: 1,
+                horizontal: 0,
+            }),
             &mut self.scroll_state,
         );
 
@@ -422,6 +470,7 @@ impl App<'_> {
             InputMode::Editing => "Editing New Task (Press Enter to configure options)",
             InputMode::ModifyingItem => "Configuring Task Details...",
         };
+
         let input_block = Block::bordered()
             .border_type(BorderType::Rounded)
             .title(input_title)
@@ -432,47 +481,144 @@ impl App<'_> {
             });
 
         let input_text = Line::from(self.text_input.clone());
+
         frame.render_widget(input_block, bottom);
-        frame.render_widget(input_text, bottom.inner(Margin { vertical: 1, horizontal: 1 }));
+        frame.render_widget(
+            input_text,
+            bottom.inner(Margin {
+                vertical: 1,
+                horizontal: 1,
+            }),
+        );
 
         if matches!(self.input_mode, InputMode::Editing) {
             frame.set_cursor_position((
                 bottom.x + 1 + self.cursor_pos as u16,
                 bottom.y + 1,
             ));
-        } else if matches!(self.input_mode, InputMode::ModifyingItem) {
-            frame.set_cursor_position((
-                bottom.x + 1 + self.cursor_pos as u16,
-                bottom.y + 1,
-            ));
         }
+
         if matches!(self.input_mode, InputMode::ModifyingItem) {
-            let popup_area = centered_rect(60, 45, frame.area());
-            frame.render_widget(Clear, popup_area); // Clears text underneath
+            let popup_area = centered_rect(65, 45, frame.area());
+
+            frame.render_widget(Clear, popup_area);
 
             let popup_block = Block::bordered()
                 .border_type(BorderType::Rounded)
                 .title(" Configure New Task ")
                 .style(Style::default().fg(Color::Green).bg(Color::Black));
 
-           let popup_layout = Layout::vertical([
+            let popup_layout = Layout::vertical([
                 Constraint::Length(2),
                 Constraint::Length(2),
                 Constraint::Length(2),
                 Constraint::Length(2),
-            ]).margin(1);
+            ])
+            .margin(1);
 
-            let popup_rects = popup_area.inner(Margin { vertical: 1, horizontal: 2 });
+            let popup_rects = popup_area.inner(Margin {
+                vertical: 1,
+                horizontal: 2,
+            });
+
             let chunks = popup_layout.split(popup_rects);
 
-            let p_style = if self.popup_index == 0 { Style::default().fg(Color::Yellow).add_modifier(Modifier::REVERSED) } else { Style::default() };
-            let s_style = if self.popup_index == 1 { Style::default().fg(Color::Yellow).add_modifier(Modifier::REVERSED) } else { Style::default() };
-            let d_style = if self.popup_index == 2 { Style::default().fg(Color::Yellow).add_modifier(Modifier::REVERSED) } else { Style::default() };
+            let p_style = if self.popup_index == 0 {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::REVERSED)
+            } else {
+                Style::default()
+            };
 
-            let p_line = Line::from(vec![Span::raw("Priority: "), Span::styled(format!("< {} >", self.priority), p_style)]);
-            let s_line = Line::from(vec![Span::raw("Status:   "), Span::styled(format!("< {} >", self.status), s_style)]);
-            let d_line = Line::from(vec![Span::raw("Due:      "), Span::styled(format!("< {} >", self.due_date.format("%Y-%m-%d %H:%M:%S").to_string()), d_style)]);
-            let help_line = Line::from(Span::styled(" [↑/↓] Select | [←/→] Change | [Enter] Save | [Esc] Back ", Style::default().fg(Color::DarkGray)));
+            let s_style = if self.popup_index == 1 {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::REVERSED)
+            } else {
+                Style::default()
+            };
+
+            let date_selected = self.popup_index == 2;
+
+            let d_style = if date_selected {
+                Style::default().fg(Color::Black).bg(Color::Yellow)
+            } else {
+                Style::default()
+            };
+
+            let placeholder = self.due_date.format("%Y-%m-%d %H:%M:%S").to_string();
+
+            let mut date_spans = vec![Span::styled("< ", d_style)];
+
+            if self.popup_text_input.is_empty() {
+                // Placeholder text
+                let placeholder_style = if date_selected {
+                    Style::default()
+                        .fg(Color::DarkGray)
+                        .bg(Color::Yellow)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
+
+                date_spans.push(Span::styled(placeholder, placeholder_style));
+            } else {
+                let overlap = self
+                    .popup_text_input
+                    .chars()
+                    .count()
+                    .min(placeholder.len());
+
+                let typed_text: String =
+                    self.popup_text_input.chars().take(overlap).collect();
+
+                // Entered text: black on yellow when selected.
+                let typed_style = if date_selected {
+                    Style::default().fg(Color::Black).bg(Color::Yellow)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+
+                date_spans.push(Span::styled(typed_text, typed_style));
+
+                if overlap < placeholder.len() {
+                    // Remaining placeholder text stays visibly darker.
+                    let placeholder_style = if date_selected {
+                        Style::default()
+                            .fg(Color::DarkGray)
+                            .bg(Color::Yellow)
+                    } else {
+                        Style::default().fg(Color::DarkGray)
+                    };
+
+                    date_spans.push(Span::styled(
+                        &placeholder[overlap..],
+                        placeholder_style,
+                    ));
+                }
+            }
+
+            date_spans.push(Span::styled(" >", d_style));
+
+            let p_line = Line::from(vec![
+                Span::raw("Priority: "),
+                Span::styled(format!("< {} >", self.priority), p_style),
+            ]);
+
+            let s_line = Line::from(vec![
+                Span::raw("Status:   "),
+                Span::styled(format!("< {} >", self.status), s_style),
+            ]);
+
+            let mut d_line_spans = vec![Span::raw("Due:      ")];
+            d_line_spans.extend(date_spans);
+
+            let d_line = Line::from(d_line_spans);
+
+            let help_line = Line::from(Span::styled(
+                " [↑/↓] Select | [Type] Enter Date | [Enter] Save | [Esc] Back ",
+                Style::default().fg(Color::DarkGray),
+            ));
 
             frame.render_widget(popup_block, popup_area);
             if chunks.len() >= 4 {
