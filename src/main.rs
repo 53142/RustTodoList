@@ -1,10 +1,10 @@
 use color_eyre::Result;
-use crossterm::event::{self, KeyCode, KeyEventKind};
+use crossterm::event::{self, KeyCode};
 use ratatui::{DefaultTerminal, Frame};
-use ratatui::layout::{Constraint, Layout, Margin};
+use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, List, ListState, ListItem, Scrollbar, ScrollbarOrientation, ScrollbarState};
+use ratatui::text::{Line, Span, ToText};
+use ratatui::widgets::{Block, BorderType, Clear, List, ListItem, ListState, Scrollbar, ScrollbarOrientation, ScrollbarState};
 use core::fmt;
 use std::fs::File;
 use std::path::Path;
@@ -58,6 +58,7 @@ struct TodoListItem {
 enum InputMode {
     Normal,
     Editing,
+    ModifyingItem,
 }
 
 struct App<'a> {
@@ -68,6 +69,11 @@ struct App<'a> {
     input_mode: InputMode,
     list_state: ListState,
     scroll_state: ScrollbarState,
+    priority: TodoListPriority,
+    status: TodoListItemStatus,
+    due_date: DateTime<Utc>,
+    popup_index: usize, // Item selected within popup menu
+    popup_text_input: String,
 }
 
 fn write_data_to_file(path: &Path, data: &[TodoListItem]) -> Result<()> {
@@ -95,6 +101,22 @@ fn read_data_from_file(path: &Path) -> Result<Vec<TodoListItem>> {
     Ok(items)
 }
 
+fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+    let popup_layout = Layout::vertical([
+        Constraint::Percentage((100 - percent_y) / 2),
+        Constraint::Percentage(percent_y),
+        Constraint::Percentage((100 - percent_y) / 2),
+    ])
+    .split(r);
+
+    Layout::horizontal([
+        Constraint::Percentage((100 - percent_x) / 2),
+        Constraint::Percentage(percent_x),
+        Constraint::Percentage((100 - percent_x) / 2),
+    ])
+    .split(popup_layout[1])[1]
+}
+
 impl App<'_> {
     fn new() -> Result<Self> {
         let file_path = Path::new("TodoList.json");
@@ -113,6 +135,11 @@ impl App<'_> {
             input_mode: InputMode::Normal,
             list_state,
             scroll_state,
+            priority: TodoListPriority::Medium,
+            status: TodoListItemStatus::NotStarted,
+            due_date: Utc::now(),
+            popup_index: 0,
+            popup_text_input: String::new(),
         })
     }
 
@@ -126,6 +153,11 @@ impl App<'_> {
 
     fn enter_char(&mut self, new_char: char) {
         self.text_input.insert(self.byte_index(), new_char);
+        self.move_cursor_right();
+    }
+
+    fn enter_char_popup(&mut self, new_char: char) {
+        self.popup_text_input.insert(self.byte_index(), new_char);
         self.move_cursor_right();
     }
 
@@ -167,42 +199,45 @@ impl App<'_> {
         self.cursor_pos = 0;
     }
 
-    fn add_todo_list_item(&mut self) -> Result<()> {
-        if self.text_input.trim().is_empty() {
-            return Ok(());
-        }
+    fn save_new_item(&mut self) -> Result<()> {
         self.todo_list_items.push(TodoListItem {
             item_name: self.text_input.clone(),
-            priority: TodoListPriority::Medium,
-            due_date: Utc::now() + chrono::Duration::days(1),
-            status: TodoListItemStatus::NotStarted,
+            priority: self.priority.clone(),
+            due_date: self.due_date.clone(),
+            status: self.status.clone(),
         });
         self.text_input.clear();
         self.reset_cursor();
         write_data_to_file(self.path, &self.todo_list_items)?;
         self.scroll_state = self.scroll_state.content_length(self.todo_list_items.len());
 
-        // Select the item when creating a new one if there was not already one
-        if self.list_state == ListState::default() {
+        if self.list_state.selected().is_none() && !self.todo_list_items.is_empty() {
             self.list_state.select(Some(0));
         }
 
+        // Reset popup form values to defaults
+        self.priority = TodoListPriority::Medium;
+        self.status = TodoListItemStatus::NotStarted;
+        self.due_date = Utc::now();
+        self.popup_index = 0;
+
         Ok(())
     }
 
-    fn toggle_status(&mut self) -> Result<()> {
-        if let Some(i) = self.list_state.selected() {
-            if let Some(item) = self.todo_list_items.get_mut(i) {
-                item.status = match item.status {
-                    TodoListItemStatus::NotStarted => TodoListItemStatus::InProgress,
-                    TodoListItemStatus::InProgress => TodoListItemStatus::Complete,
-                    TodoListItemStatus::Complete => TodoListItemStatus::NotStarted,
-                };
-                write_data_to_file(self.path, &self.todo_list_items)?;
-            }
-        }
-        Ok(())
-    }
+    // fn toggle_status(&mut self) -> Result<()> {
+    //     if let Some(i) = self.list_state.selected() {
+    //         // If item is in list
+    //         if let Some(item) = self.todo_list_items.get_mut(i) {
+    //             item.status = match item.status {
+    //                 TodoListItemStatus::NotStarted => TodoListItemStatus::InProgress,
+    //                 TodoListItemStatus::InProgress => TodoListItemStatus::Complete,
+    //                 TodoListItemStatus::Complete => TodoListItemStatus::NotStarted,
+    //             };
+    //             write_data_to_file(self.path, &self.todo_list_items)?;
+    //         }
+    //     }
+    //     Ok(())
+    // }
 
     fn delete_selected_item(&mut self) -> Result<()> {
         if let Some(i) = self.list_state.selected() {
@@ -247,7 +282,16 @@ impl App<'_> {
                             self.input_mode = InputMode::Editing;
                         }
                         KeyCode::Enter | KeyCode::Char(' ') => {
-                            self.toggle_status()?;
+                            // self.toggle_status()?;
+                            if let Some(i) = self.list_state.selected() {
+                                // If selected item is in list
+                                if let Some(item) = self.todo_list_items.get_mut(i) {
+                                    self.priority = item.priority.clone();
+                                    self.status = item.status.clone();
+                                    self.due_date = item.due_date.clone();
+                                }
+                            }
+                            self.input_mode = InputMode::ModifyingItem;
                         }
                         KeyCode::Char('d') | KeyCode::Delete => {
                             self.delete_selected_item()?;
@@ -256,8 +300,9 @@ impl App<'_> {
                     },
                     InputMode::Editing => match key.code {
                         KeyCode::Enter => {
-                            self.add_todo_list_item()?;
-                            self.input_mode = InputMode::Normal;
+                            if !self.text_input.trim().is_empty() {
+                                self.input_mode = InputMode::ModifyingItem;
+                            }
                         }
                         KeyCode::Esc => {
                             self.input_mode = InputMode::Normal;
@@ -267,6 +312,49 @@ impl App<'_> {
                         KeyCode::Delete => self.delete_char(),
                         KeyCode::Left => self.move_cursor_left(),
                         KeyCode::Right => self.move_cursor_right(),
+                        _ => {}
+                    },
+                    InputMode::ModifyingItem => match key.code {
+                        KeyCode::Esc => {
+                            self.input_mode = InputMode::Editing;
+                        }
+                        KeyCode::Up | KeyCode::Char('k') => {
+                            self.popup_index = self.popup_index.saturating_sub(1);
+                        }
+                        KeyCode::Down | KeyCode::Char('j') => {
+                            self.popup_index = (self.popup_index + 1).min(2);
+                        }
+                        KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') => {
+                            match self.popup_index {
+                                0 => {
+                                    self.priority = match self.priority {
+                                        TodoListPriority::Low => TodoListPriority::Medium,
+                                        TodoListPriority::Medium => TodoListPriority::High,
+                                        TodoListPriority::High => TodoListPriority::Low,
+                                    };
+                                }
+                                1 => {
+                                    self.status = match self.status {
+                                        TodoListItemStatus::NotStarted => TodoListItemStatus::InProgress,
+                                        TodoListItemStatus::InProgress => TodoListItemStatus::Complete,
+                                        TodoListItemStatus::Complete => TodoListItemStatus::NotStarted,
+                                    };
+                                }
+                                // 2 => {
+                                //     if matches!(key.code, KeyCode::Right) {
+                                //         self.due_days += 1;
+                                //     } else {
+                                //         self.due_days = (self.due_days - 1).max(0);
+                                //     }
+                                // }
+                                _ => {}
+                            }
+                        },
+                        KeyCode::Char(to_insert) => self.enter_char_popup(to_insert),
+                        KeyCode::Enter => {
+                            self.save_new_item()?; // Save using temp values
+                            self.input_mode = InputMode::Normal;
+                        }
                         _ => {}
                     },
                 }
@@ -293,15 +381,15 @@ impl App<'_> {
             .map(|item| {
                 let status_symbol = match item.status {
                     TodoListItemStatus::NotStarted => "[ ]",
-                    TodoListItemStatus::InProgress => "[~]",
-                    TodoListItemStatus::Complete => "[x]",
+                    TodoListItemStatus::InProgress => "[*]",
+                    TodoListItemStatus::Complete => "[X]",
                 };
                 let content = format!(
                     "{} {} | Priority: {} | Due: {}",
                     status_symbol,
                     item.item_name,
                     item.priority,
-                    item.due_date.format("%d/%m/%Y")
+                    item.due_date.format("%Y-%m-%d %H:%M:%S"),
                 );
                 ListItem::new(content)
             })
@@ -309,7 +397,7 @@ impl App<'_> {
 
         let list_block = Block::bordered()
             .border_type(BorderType::Rounded)
-            .title("Your Tasks")
+            .title("Todo List")
             .style(Style::new().blue());
 
         let list = List::new(items)
@@ -331,7 +419,8 @@ impl App<'_> {
 
         let input_title = match self.input_mode {
             InputMode::Normal => "New Task Input (Press 'i' or 'a' to type)",
-            InputMode::Editing => "Editing New Task (Press Enter to save, Esc to cancel)",
+            InputMode::Editing => "Editing New Task (Press Enter to configure options)",
+            InputMode::ModifyingItem => "Configuring Task Details...",
         };
         let input_block = Block::bordered()
             .border_type(BorderType::Rounded)
@@ -339,6 +428,7 @@ impl App<'_> {
             .style(match self.input_mode {
                 InputMode::Normal => Style::default(),
                 InputMode::Editing => Style::default().fg(Color::Yellow),
+                InputMode::ModifyingItem => Style::default().fg(Color::DarkGray),
             });
 
         let input_text = Line::from(self.text_input.clone());
@@ -350,6 +440,47 @@ impl App<'_> {
                 bottom.x + 1 + self.cursor_pos as u16,
                 bottom.y + 1,
             ));
+        } else if matches!(self.input_mode, InputMode::ModifyingItem) {
+            frame.set_cursor_position((
+                bottom.x + 1 + self.cursor_pos as u16,
+                bottom.y + 1,
+            ));
+        }
+        if matches!(self.input_mode, InputMode::ModifyingItem) {
+            let popup_area = centered_rect(60, 45, frame.area());
+            frame.render_widget(Clear, popup_area); // Clears text underneath
+
+            let popup_block = Block::bordered()
+                .border_type(BorderType::Rounded)
+                .title(" Configure New Task ")
+                .style(Style::default().fg(Color::Green).bg(Color::Black));
+
+           let popup_layout = Layout::vertical([
+                Constraint::Length(2),
+                Constraint::Length(2),
+                Constraint::Length(2),
+                Constraint::Length(2),
+            ]).margin(1);
+
+            let popup_rects = popup_area.inner(Margin { vertical: 1, horizontal: 2 });
+            let chunks = popup_layout.split(popup_rects);
+
+            let p_style = if self.popup_index == 0 { Style::default().fg(Color::Yellow).add_modifier(Modifier::REVERSED) } else { Style::default() };
+            let s_style = if self.popup_index == 1 { Style::default().fg(Color::Yellow).add_modifier(Modifier::REVERSED) } else { Style::default() };
+            let d_style = if self.popup_index == 2 { Style::default().fg(Color::Yellow).add_modifier(Modifier::REVERSED) } else { Style::default() };
+
+            let p_line = Line::from(vec![Span::raw("Priority: "), Span::styled(format!("< {} >", self.priority), p_style)]);
+            let s_line = Line::from(vec![Span::raw("Status:   "), Span::styled(format!("< {} >", self.status), s_style)]);
+            let d_line = Line::from(vec![Span::raw("Due:      "), Span::styled(format!("< {} >", self.due_date.format("%Y-%m-%d %H:%M:%S").to_string()), d_style)]);
+            let help_line = Line::from(Span::styled(" [↑/↓] Select | [←/→] Change | [Enter] Save | [Esc] Back ", Style::default().fg(Color::DarkGray)));
+
+            frame.render_widget(popup_block, popup_area);
+            if chunks.len() >= 4 {
+                frame.render_widget(p_line, chunks[0]);
+                frame.render_widget(s_line, chunks[1]);
+                frame.render_widget(d_line, chunks[2]);
+                frame.render_widget(help_line, chunks[3]);
+            }
         }
     }
 }
