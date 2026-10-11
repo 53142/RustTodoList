@@ -11,7 +11,6 @@ fn main() -> Result<()> {
 
     let mut terminal = ratatui::init();
     let app = App::new()?;
-
     let result = app.run(&mut terminal);
 
     ratatui::restore();

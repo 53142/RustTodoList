@@ -11,6 +11,7 @@ use ratatui::widgets::{
     Scrollbar,
     ScrollbarOrientation,
 };
+use chrono::Local;
 
 use crate::models::{App, InputMode, TodoListItemStatus};
 
@@ -73,7 +74,7 @@ impl App {
                     status_symbol,
                     item.item_name,
                     item.priority,
-                    item.due_date.format("%Y-%m-%d %H:%M"),
+                    item.due_date.with_timezone(&Local).format("%Y-%m-%d %H:%M"),
                 );
 
                 ListItem::new(content)
@@ -209,6 +210,7 @@ impl App {
 
             let placeholder = self
                 .due_date
+                .with_timezone(&Local)
                 .format("%Y-%m-%d %H:%M")
                 .to_string();
 
@@ -217,8 +219,6 @@ impl App {
             ];
 
             if self.popup_text_input.is_empty() {
-                // Display the example date when the field is empty.
-                // Use dark gray text on the yellow selection background.
                 let placeholder_style = if date_selected {
                     Style::default()
                         .fg(Color::DarkGray)
@@ -228,23 +228,10 @@ impl App {
                 };
 
                 date_spans.push(Span::styled(
-                    placeholder.clone(),
+                    placeholder,
                     placeholder_style,
                 ));
             } else {
-                let overlap = self
-                    .popup_text_input
-                    .chars()
-                    .count()
-                    .min(placeholder.len());
-
-                let typed_text: String = self
-                    .popup_text_input
-                    .chars()
-                    .take(overlap)
-                    .collect();
-
-                // Typed text is black on yellow when the date field is selected.
                 let typed_style = if date_selected {
                     Style::default()
                         .fg(Color::Black)
@@ -254,25 +241,9 @@ impl App {
                 };
 
                 date_spans.push(Span::styled(
-                    typed_text,
+                    self.popup_text_input.clone(),
                     typed_style,
                 ));
-
-                if overlap < placeholder.len() {
-                    // Keep the untyped portion visibly darker than the entered text, including when highlighted.
-                    let placeholder_style = if date_selected {
-                        Style::default()
-                            .fg(Color::DarkGray)
-                            .bg(Color::Yellow)
-                    } else {
-                        Style::default().fg(Color::DarkGray)
-                    };
-
-                    date_spans.push(Span::styled(
-                        &placeholder[overlap..],
-                        placeholder_style,
-                    ));
-                }
             }
 
             date_spans.push(Span::styled(" >", d_style));

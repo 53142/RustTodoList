@@ -1,7 +1,9 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, Local, TimeDelta, TimeZone, Timelike, Utc};
 use color_eyre::Result;
+use color_eyre::eyre::Ok;
 use crossterm::event::{self, KeyCode};
 use ratatui::DefaultTerminal;
+use regex::Regex;
 
 use crate::models::{App, InputMode, ModifyingMode, TodoListItem, TodoListItemStatus, TodoListPriority};
 use crate::storage::{read_data_from_file, write_data_to_file};
@@ -29,7 +31,7 @@ impl App {
             scroll_state,
             priority: TodoListPriority::Medium,
             status: TodoListItemStatus::NotStarted,
-            due_date: Utc::now() + chrono::Duration::days(1),
+            due_date: Local::now().with_timezone(&Utc) + chrono::Duration::days(1),
             popup_index: 0,
             popup_text_input: String::new(),
             modifying_mode: ModifyingMode::NewItem,
@@ -89,14 +91,67 @@ impl App {
         self.cursor_pos = 0;
     }
 
-    fn save_new_item(&mut self) -> Result<()> {
-        let parsed_date = DateTime::parse_from_str(
-            &format!("{} +0000", self.popup_text_input.trim()),
-            "%Y-%m-%d %H:%M %z",
-        )
-        .map(|dt| dt.with_timezone(&Utc))
-        .unwrap_or_else(|_| Utc::now() + chrono::Duration::days(1)); // Default to one day in future
+    // Attempt to parse the DateTime returning the DateTime or None if could not properly extract the time
+    pub fn parse_time(&mut self) -> Option<DateTime<Utc>> {
+        // format date
+        let date = self.popup_text_input.trim().to_lowercase().replace(' ', "").replace(':', "");
+        let pm = date.contains("pm");
+        let am = date.contains("am");
+
+        let digits_regex = Regex::new(r"\d+").ok()?;
+        let digits = digits_regex.find(&date)?.as_str();
+
+        // Find raw hours and minutes
+        let (mut h, m) = match digits.len() {
+            1 | 2 => (digits.parse::<u32>().ok()?, 0),
+            3 => (digits[0..1].parse::<u32>().ok()?, digits[1..3].parse::<u32>().ok()?),
+            4 => (digits[0..2].parse::<u32>().ok()?, digits[2..4].parse::<u32>().ok()?),
+            _ => return None
+        };
+
+        if am || pm {
+            if h < 1 || h > 12 || am && pm {
+                return None;
+            }
+            if pm && h < 12 {
+                h += 12;
+            }
+            if am && h == 12 { // 12am = 0
+                h = 0;
+            }
+        }
         
+        let mut datetime = Local::now()
+            .with_hour(h)?
+            .with_minute(m)?
+            .with_second(0)?
+            .with_nanosecond(0)?
+            .with_timezone(&Utc);
+        if datetime < Local::now() {
+            datetime += chrono::Duration::days(1);
+        }
+        Some(datetime)
+    }
+
+
+    fn save_new_item(&mut self) -> Result<()> {
+        let parsed_date = if let Some(date) = self.parse_time() {
+            date
+        } else {
+            // Default due date to one hour in the future
+            DateTime::parse_from_str(&format!("{} +0000", self.popup_text_input.trim()),"%Y-%m-%d %H:%M %z")
+                .ok()
+                .map(|dt| dt.with_timezone(&Utc))
+                .unwrap_or_else(|| {
+                    (Local::now() + TimeDelta::hours(1))
+                        .with_second(0)
+                        .unwrap()
+                        .with_nanosecond(0)
+                        .unwrap()
+                        .with_timezone(&Utc)
+                })
+        };
+
         let new_item = TodoListItem {
             item_name: self.text_input.clone(),
             priority: self.priority,
@@ -125,7 +180,7 @@ impl App {
 
         self.priority = TodoListPriority::Medium;
         self.status = TodoListItemStatus::NotStarted;
-        self.due_date = Utc::now() + chrono::Duration::days(1);
+        self.due_date = (Local::now() + chrono::Duration::days(1)).with_timezone(&Utc);
 
         self.popup_text_input.clear();
         self.popup_index = 0;

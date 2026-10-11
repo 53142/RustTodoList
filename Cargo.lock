@@ -10,6 +10,7 @@ dependencies = [
  "color-eyre",
  "crossterm",
  "ratatui",
+ "regex",
  "serde",
  "serde_json",
 ]
