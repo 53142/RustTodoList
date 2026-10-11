@@ -1,4 +1,4 @@
-use chrono::{DateTime, Datelike, Local, TimeDelta, TimeZone, Timelike, Utc};
+use chrono::{DateTime, Local, TimeDelta, Timelike, Utc};
 use color_eyre::Result;
 use color_eyre::eyre::Ok;
 use crossterm::event::{self, KeyCode};
@@ -110,13 +110,15 @@ impl App {
         };
 
         if am || pm {
+            // Reject invalid times
             if h < 1 || h > 12 || am && pm {
                 return None;
             }
+            // Adjust pm to military time
             if pm && h < 12 {
                 h += 12;
             }
-            if am && h == 12 { // 12am = 0
+            if am && h == 12 { // 12am = 00:00
                 h = 0;
             }
         }
@@ -127,6 +129,7 @@ impl App {
             .with_second(0)?
             .with_nanosecond(0)?
             .with_timezone(&Utc);
+        // If time is in past, add a day to it to make it valid
         if datetime < Local::now() {
             datetime += chrono::Duration::days(1);
         }
@@ -138,7 +141,7 @@ impl App {
         let parsed_date = if let Some(date) = self.parse_time() {
             date
         } else {
-            // Default due date to one hour in the future
+            // If unable to parse it with natural language format, check UTC format then default date to one hour in the future
             DateTime::parse_from_str(&format!("{} +0000", self.popup_text_input.trim()),"%Y-%m-%d %H:%M %z")
                 .ok()
                 .map(|dt| dt.with_timezone(&Utc))
@@ -161,10 +164,8 @@ impl App {
 
         if self.modifying_mode == ModifyingMode::NewItem {
             self.todo_list_items.push(new_item);
-        } else {
-            if let Some(i) = self.list_state.selected() {
-                self.todo_list_items[i] = new_item;
-            }
+        } else if let Some(i) = self.list_state.selected() {
+            self.todo_list_items[i] = new_item;
         }
 
         self.text_input.clear();
@@ -181,7 +182,6 @@ impl App {
         self.priority = TodoListPriority::Medium;
         self.status = TodoListItemStatus::NotStarted;
         self.due_date = (Local::now() + chrono::Duration::days(1)).with_timezone(&Utc);
-
         self.popup_text_input.clear();
         self.popup_index = 0;
 
@@ -200,8 +200,7 @@ impl App {
                 if self.todo_list_items.is_empty() {
                     self.list_state.select(None);
                 } else {
-                    self.list_state
-                        .select(Some(new_selected.min(self.todo_list_items.len() - 1)));
+                    self.list_state.select(Some(new_selected.min(self.todo_list_items.len() - 1)));
                 }
 
                 self.scroll_state = self.scroll_state.content_length(self.todo_list_items.len());
@@ -221,7 +220,7 @@ impl App {
                         KeyCode::Char('q') | KeyCode::Esc => {
                             break Ok(());
                         }
-                        KeyCode::Down | KeyCode::Char('j') => {
+                        KeyCode::Down | KeyCode::Tab => {
                             if !self.todo_list_items.is_empty() {
                                 let i = self.list_state.selected().unwrap_or(0);
 
@@ -230,7 +229,7 @@ impl App {
                                 self.list_state.select(Some(next));
                             }
                         }
-                        KeyCode::Up | KeyCode::Char('k') => {
+                        KeyCode::Up | KeyCode::BackTab => {
                             if !self.todo_list_items.is_empty() {
                                 let i = self.list_state.selected().unwrap_or(0);
 
@@ -254,7 +253,7 @@ impl App {
                             self.modifying_mode = ModifyingMode::ExistingItem;
                             self.input_mode = InputMode::ModifyingItem;
                         }
-                        KeyCode::Char('d') | KeyCode::Delete => {
+                        KeyCode::Backspace | KeyCode::Delete => {
                             self.delete_selected_item()?;
                         }
                         _ => {}
@@ -276,8 +275,8 @@ impl App {
                     },
                     InputMode::ModifyingItem => match key.code {
                         KeyCode::Esc => self.input_mode = InputMode::Editing,
-                        KeyCode::Up | KeyCode::Char('k') => self.popup_index = self.popup_index.saturating_sub(1),
-                        KeyCode::Down | KeyCode::Char('j') => self.popup_index = (self.popup_index + 1).min(2),
+                        KeyCode::Up | KeyCode::BackTab => self.popup_index = self.popup_index.saturating_sub(1),
+                        KeyCode::Down | KeyCode::Tab => self.popup_index = (self.popup_index + 1).min(2),
                         KeyCode::Left if self.popup_index != 2 => {
                             match self.popup_index {
                                 0 => {

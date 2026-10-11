@@ -50,7 +50,7 @@ impl App {
             Span::from("Todo List TUI").bold().cyan(),
             Span::from(
                 " | [a] Add Task | [Enter] Modify Item \
-                 | [d] Delete | [q] Quit",
+                 | [Del/Backspace] Delete | [q] Quit ",
             ),
         ]);
 
@@ -120,9 +120,9 @@ impl App {
         );
 
         let input_title = match self.input_mode {
-            InputMode::Normal => "New Task Input (Press 'a' to type)",
-            InputMode::Editing => "Editing New Task (Press Enter to configure options)",
-            InputMode::ModifyingItem => "Configuring Task Details...",
+            InputMode::Normal => "New Task Input (Press 'a' to type) ",
+            InputMode::Editing => "Editing New Task (Press Enter to configure options) ",
+            InputMode::ModifyingItem => "Configuring Task Details... ",
         };
 
         let input_block = Block::bordered()
@@ -163,7 +163,7 @@ impl App {
                 .title(" Configure New Task ")
                 .style(
                     Style::default()
-                        .fg(Color::Green)
+                        .fg(Color::Red)
                         .bg(Color::Black),
                 );
 
